@@ -1,5 +1,5 @@
 watch:
-	find . -name '*.go' | entr -rc go run .
+	find . -name '*.go' -or -name '*.js' -or -name '*.html' | entr -rc go run .
 
 compile:
 	go build -o dist/ .
