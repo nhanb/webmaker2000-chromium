@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os/exec"
 	"sync"
+	"text/template"
+
+	"nhooyr.io/websocket"
+	"nhooyr.io/websocket/wsjson"
 )
 
 //go:embed frontend
@@ -23,7 +29,7 @@ func main() {
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
 	frontendUrl := fmt.Sprintf("http://localhost:%d/frontend/", port)
-	websocketUrl := fmt.Sprintf("http://localhost:%d/websocket", port)
+	websocketUrl := fmt.Sprintf("ws://localhost:%d/websocket", port)
 	fmt.Println("Serving:")
 	fmt.Printf("- %s\n", frontendUrl)
 	fmt.Printf("- %s\n", websocketUrl)
@@ -34,11 +40,60 @@ func main() {
 	go func() {
 		defer wg.Done()
 		fmt.Println("Server starting")
+
 		srv := &http.Server{}
 		http.Handle("/", http.FileServer(http.FS(frontend)))
+
+		// Basically a way to pass server-side constants to client:
+		http.HandleFunc("/frontend/config.js", func() func(http.ResponseWriter, *http.Request) {
+			// Route-specific setup
+			tmplContent, err := fs.ReadFile(frontend, "frontend/config.js.tmpl")
+			if err != nil {
+				panic(err)
+			}
+			tmpl, err := template.New("jsconfig").Parse(string(tmplContent))
+			if err != nil {
+				panic(err)
+			}
+
+			// Actual route handler
+			return func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Add("Content-Type", "text/javascript")
+				w.WriteHeader(200)
+				err = tmpl.Execute(w, struct {
+					WebsocketUrl string
+				}{
+					WebsocketUrl: websocketUrl,
+				})
+				if err != nil {
+					panic(err)
+				}
+			}
+		}())
+
 		http.HandleFunc("/websocket", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(200)
-			w.Write([]byte("TODO"))
+			c, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				panic(err)
+			}
+			defer c.CloseNow()
+
+			ctx := context.Background()
+
+			var v interface{}
+			for {
+				err = wsjson.Read(ctx, c, &v)
+				if websocket.CloseStatus(err) == websocket.StatusGoingAway {
+					fmt.Println("Websocket closed by client. Closing server")
+					srv.Shutdown(context.TODO())
+					return
+				}
+				if err != nil {
+					panic(fmt.Errorf("decode json: %w", err))
+				}
+
+				fmt.Printf("received: %v\n", v)
+			}
 		})
 		if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
@@ -46,21 +101,30 @@ func main() {
 		fmt.Println("Server closed")
 	}()
 
-	// Start GUI
-	cmdArgs := []string{
-		fmt.Sprintf("--app=%s", frontendUrl),
-		// Chrome needs both --class & --user-dir to correctly
-		// set taskbar icon:
-		"--class=webmaker2000",
-		"--user-dir=/tmp/webmaker2000",
-	}
-	fmt.Println("Browser starting")
-	cmd := exec.Command("chromium", cmdArgs...)
-	err = cmd.Run()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Browser closed")
+	// Start GUI browser
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fmt.Println("Browser starting")
+
+		// The chrome/chromium command may or may not block: if there's already
+		// a running Chrome process, running this command will not block,
+		// otherwise it will. Therefore, we cannot use cmd to determine if
+		// the browser is open or closed.
+		// (we'll check whether the websocket is closed instead)
+		cmd := exec.Command(
+			"chromium",
+			fmt.Sprintf("--app=%s", frontendUrl),
+			// Chrome needs both --class & --user-dir to correctly
+			// set taskbar icon:
+			"--class=webmaker2000",
+			"--user-dir=/tmp/webmaker2000",
+		)
+		err = cmd.Run()
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	wg.Wait()
 	fmt.Println("All closed")
