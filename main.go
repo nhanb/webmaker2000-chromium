@@ -62,6 +62,9 @@ export default constants;
 			}
 		}())
 
+		// RPC transport between client & server.
+		// When either client or server exits, the other side notices that the
+		// websocket is closed, then exits itself.
 		http.HandleFunc("/websocket", func(w http.ResponseWriter, r *http.Request) {
 			c, err := websocket.Accept(w, r, nil)
 			if err != nil {
