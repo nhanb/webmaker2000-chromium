@@ -43,8 +43,7 @@ func main() {
 		http.Handle("/", http.FileServer(http.FS(frontend)))
 
 		// Basically a way to pass server-side constants to client:
-		http.HandleFunc("/frontend/constants.js", func() func(http.ResponseWriter, *http.Request) {
-			// Route-specific one-time setup
+		http.HandleFunc("/frontend/constants.js", func(w http.ResponseWriter, r *http.Request) {
 			constants := []byte(fmt.Sprintf(`
 const constants = {
     WEBSOCKET_URL: "%s",
@@ -53,14 +52,10 @@ export default constants;
 `,
 				websocketUrl,
 			))
-
-			// Actual route handler
-			return func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Add("Content-Type", "text/javascript")
-				w.WriteHeader(200)
-				w.Write(constants)
-			}
-		}())
+			w.Header().Add("Content-Type", "text/javascript")
+			w.WriteHeader(200)
+			w.Write(constants)
+		})
 
 		// RPC transport between client & server.
 		// When either client or server exits, the other side notices that the
