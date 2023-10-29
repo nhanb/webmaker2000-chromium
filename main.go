@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 
+	"go.imnhan.com/webmaker2000/database"
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
 )
@@ -17,7 +20,33 @@ import (
 //go:embed frontend
 var frontend embed.FS
 
+const FileExt = "wm2k"
+const FileDefaultName = "Site1." + FileExt
+
+var AppState = struct {
+	FilePath string `json:"filePath"`
+	Route    string `json:"route"`
+}{}
+
+type Request struct {
+	Proc string `json:"proc"`
+}
+
+type Response struct {
+	Type string `json:"type"`
+	Data any    `json:"data"`
+}
+
 func main() {
+	if len(os.Args) > 2 {
+		fmt.Println("Usage: webmaker2000 Site1.wm2k")
+		os.Exit(1)
+	}
+
+	if len(os.Args) == 2 {
+		AppState.FilePath = os.Args[1]
+		database.ConnectDb(AppState.FilePath)
+	}
 
 	// Snatch a random port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -69,9 +98,9 @@ export default constants;
 
 			ctx := context.Background()
 
-			var v interface{}
+			var req Request
 			for {
-				err = wsjson.Read(ctx, c, &v)
+				err = wsjson.Read(ctx, c, &req)
 				if websocket.CloseStatus(err) == websocket.StatusGoingAway {
 					fmt.Println("Websocket closed by client. Closing server")
 					srv.Shutdown(context.TODO())
@@ -81,7 +110,21 @@ export default constants;
 					panic(fmt.Errorf("decode json: %w", err))
 				}
 
-				fmt.Printf("received: %v\n", v)
+				fmt.Printf("Received: %v\n", req)
+
+				switch req.Proc {
+				case "getstate":
+					state, err := json.Marshal(Response{
+						Type: "state",
+						Data: AppState,
+					})
+					if err != nil {
+						panic(state)
+					}
+					c.Write(ctx, websocket.MessageText, state)
+				default:
+					fmt.Println("Unexpected request:", req)
+				}
 			}
 		})
 		if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
