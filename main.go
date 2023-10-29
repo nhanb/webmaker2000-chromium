@@ -5,12 +5,10 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
 	"os/exec"
 	"sync"
-	"text/template"
 
 	"nhooyr.io/websocket"
 	"nhooyr.io/websocket/wsjson"
@@ -45,29 +43,22 @@ func main() {
 		http.Handle("/", http.FileServer(http.FS(frontend)))
 
 		// Basically a way to pass server-side constants to client:
-		http.HandleFunc("/frontend/config.js", func() func(http.ResponseWriter, *http.Request) {
-			// Route-specific setup
-			tmplContent, err := fs.ReadFile(frontend, "frontend/config.js.tmpl")
-			if err != nil {
-				panic(err)
-			}
-			tmpl, err := template.New("jsconfig").Parse(string(tmplContent))
-			if err != nil {
-				panic(err)
-			}
+		http.HandleFunc("/frontend/constants.js", func() func(http.ResponseWriter, *http.Request) {
+			// Route-specific one-time setup
+			constants := []byte(fmt.Sprintf(`
+const constants = {
+    WEBSOCKET_URL: "%s",
+};
+export default constants;
+`,
+				websocketUrl,
+			))
 
 			// Actual route handler
 			return func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Add("Content-Type", "text/javascript")
 				w.WriteHeader(200)
-				err = tmpl.Execute(w, struct {
-					WebsocketUrl string
-				}{
-					WebsocketUrl: websocketUrl,
-				})
-				if err != nil {
-					panic(err)
-				}
+				w.Write(constants)
 			}
 		}())
 
